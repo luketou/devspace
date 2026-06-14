@@ -36,10 +36,24 @@ import { formatAgentsNotice, formatAgentsPath, WorkspaceRegistry } from "./works
 type Transport = StreamableHTTPServerTransport;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
-// Workaround: ChatGPT currently prompts repeatedly for destructive/local-exec tools.
-// Keep the real server behavior unchanged, but advertise these tools as read-only
-// until the host has a less noisy approval flow for trusted local workspaces.
-const TRUSTED_WORKSPACE_TOOL_ANNOTATIONS = { readOnlyHint: true };
+const WRITE_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+};
+const EDIT_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+};
+const SHELL_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+};
 
 interface RunningServer {
   app: ReturnType<typeof createMcpExpressApp>;
@@ -160,6 +174,18 @@ function cardOutputSchema(
     ...extra,
   };
 }
+
+const workspaceSkillOutputSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  path: z.string(),
+});
+
+const workspaceAgentsFileOutputSchema = z.object({
+  path: z.string(),
+  alreadyLoaded: z.boolean(),
+  content: z.string(),
+});
 
 function isAuthorized(req: Request, config: ServerConfig): boolean {
   if (!config.authToken) return true;
@@ -470,7 +496,12 @@ function createMcpServer(
             managed: z.boolean(),
           })
           .optional(),
-        result: z.string(),
+        agentsFiles: z.array(workspaceAgentsFileOutputSchema),
+        skills: z.array(workspaceSkillOutputSchema),
+        skillDiagnostics: z.array(z.unknown()),
+        instruction: z.string(),
+        projectContext: z.string().optional(),
+        skillsContext: z.string().optional(),
       },
       _meta: {
         ui: {
@@ -486,59 +517,40 @@ function createMcpServer(
       const skillsNotice = formatSkillsNotice(workspace.skills, {
         compact: config.compactSkills,
       });
-      const summary = {
-        agentsFiles: agentsFiles.length,
-        skills: workspace.skills.length,
-        skillDiagnostics: workspace.skillDiagnostics.length,
-      };
-      const storedResult = results.put({
-        tool: "open_workspace",
-        workspaceId: workspace.id,
-        workspaceRoot: workspace.root,
-        label: workspace.root,
-        path: workspace.root,
-        summary,
-        payload: {
-          content: [
-            {
-              type: "text",
-              text: [agentsNotice, skillsNotice].filter(Boolean).join("\n\n"),
-            },
-          ],
-        },
-      });
+      const visibleSkills = workspace.skills
+        .filter((skill) => !skill.disableModelInvocation)
+        .map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          path: formatPathForPrompt(skill.filePath),
+        }));
+      const loadedAgentsFiles = agentsFiles.map((file) => ({
+        path: formatAgentsPath(file.path, workspace.root),
+        alreadyLoaded: file.alreadyLoaded,
+        content: file.content,
+      }));
+      const instruction = config.skillsEnabled
+        ? config.autoLoadAgentsMd
+          ? "Use this workspaceId in all subsequent tool calls for this project. Follow any projectContext returned below. When a task matches an available skill, read its path before proceeding."
+          : "Use this workspaceId in all subsequent tool calls for this project. Read relevant AGENTS.md files before working. When a task matches an available skill, read its path before proceeding."
+        : config.autoLoadAgentsMd
+          ? "Use this workspaceId in all subsequent tool calls for this project. Follow any projectContext returned below."
+          : "Use this workspaceId in all subsequent tool calls for this project. Read relevant AGENTS.md files before working.";
       const resultContent: ToolContent[] = [
         {
           type: "text" as const,
-          text: JSON.stringify(
-            {
-              workspaceId: workspace.id,
-              root: workspace.root,
-              mode: workspace.mode,
-              sourceRoot: workspace.sourceRoot,
-              worktree: workspace.worktree,
-              agentsFiles: agentsFiles.map((file) =>
-                formatAgentsPath(file.path, workspace.root),
-              ),
-              skills: workspace.skills
-                .filter((skill) => !skill.disableModelInvocation)
-                .map((skill) => ({
-                  name: skill.name,
-                  description: skill.description,
-                  path: formatPathForPrompt(skill.filePath),
-                })),
-              instruction:
-                config.skillsEnabled
-                  ? config.autoLoadAgentsMd
-                    ? "Use this workspaceId in all subsequent tool calls for this project. Follow any <project_context> returned below. When a task matches an available skill, read its path before proceeding."
-                    : "Use this workspaceId in all subsequent tool calls for this project. Read relevant AGENTS.md files before working. When a task matches an available skill, read its path before proceeding."
-                  : config.autoLoadAgentsMd
-                    ? "Use this workspaceId in all subsequent tool calls for this project. Follow any <project_context> returned below."
-                    : "Use this workspaceId in all subsequent tool calls for this project. Read relevant AGENTS.md files before working.",
-            },
-            null,
-            2,
-          ),
+          text: [
+            `Opened workspace ${workspace.id}`,
+            `Root: ${workspace.root}`,
+            `Mode: ${workspace.mode}`,
+            loadedAgentsFiles.length > 0
+              ? `Loaded project instructions: ${loadedAgentsFiles.map((file) => file.path).join(", ")}`
+              : undefined,
+            visibleSkills.length > 0
+              ? `Available skills: ${visibleSkills.map((skill) => skill.name).join(", ")}`
+              : undefined,
+            instruction,
+          ].filter(Boolean).join("\n"),
         },
         ...(agentsNotice
           ? [
@@ -560,14 +572,19 @@ function createMcpServer(
 
       return {
         content: resultContent,
-        _meta: { tool: "open_workspace", resultId: storedResult.id },
+        _meta: { tool: "open_workspace" },
         structuredContent: {
           workspaceId: workspace.id,
           root: workspace.root,
           mode: workspace.mode,
           sourceRoot: workspace.sourceRoot,
           worktree: workspace.worktree,
-          result: contentText(resultContent),
+          agentsFiles: loadedAgentsFiles,
+          skills: visibleSkills,
+          skillDiagnostics: workspace.skillDiagnostics,
+          instruction,
+          projectContext: agentsNotice,
+          skillsContext: skillsNotice,
         },
       };
     },
@@ -710,7 +727,7 @@ function createMcpServer(
           visibility: ["model"],
         },
       },
-      annotations: TRUSTED_WORKSPACE_TOOL_ANNOTATIONS,
+      annotations: WRITE_TOOL_ANNOTATIONS,
     },
     async ({ workspaceId, ...input }) => {
       const workspace = workspaces.getWorkspace(workspaceId);
@@ -803,7 +820,7 @@ function createMcpServer(
           visibility: ["model"],
         },
       },
-      annotations: TRUSTED_WORKSPACE_TOOL_ANNOTATIONS,
+      annotations: EDIT_TOOL_ANNOTATIONS,
     },
     async ({ workspaceId, ...input }) => {
       const workspace = workspaces.getWorkspace(workspaceId);
@@ -1133,7 +1150,7 @@ function createMcpServer(
           visibility: ["model"],
         },
       },
-      annotations: TRUSTED_WORKSPACE_TOOL_ANNOTATIONS,
+      annotations: SHELL_TOOL_ANNOTATIONS,
     },
     async ({ workspaceId, workingDirectory, ...input }) => {
       const workspace = workspaces.getWorkspace(workspaceId);
