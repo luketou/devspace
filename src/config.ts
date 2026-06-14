@@ -4,6 +4,19 @@ import { expandHomePath } from "./roots.js";
 import type { AutoCommitConfig, AutoCommitProviderId } from "./autocommit/types.js";
 
 export type ToolNamingMode = "legacy" | "short";
+export type LogLevel = "silent" | "error" | "warn" | "info" | "debug";
+export type LogFormat = "json" | "pretty";
+
+export interface LoggingConfig {
+  level: LogLevel;
+  format: LogFormat;
+  requests: boolean;
+  assets: boolean;
+  toolCalls: boolean;
+  shellCommands: boolean;
+  trustProxy: boolean;
+}
+
 const DEFAULT_AUTOCOMMIT_MODEL = "gpt-5.3-codex-spark";
 const DEFAULT_AUTOCOMMIT_CODEX_REASONING_EFFORT = "low";
 
@@ -21,6 +34,7 @@ export interface ServerConfig {
   skillsEnabled: boolean;
   skillPaths: string[];
   agentDir: string;
+  logging: LoggingConfig;
   autocommit: AutoCommitConfig;
 }
 
@@ -62,6 +76,20 @@ function parseBoolean(value: string | undefined): boolean {
 
 function parseMinimalTools(env: NodeJS.ProcessEnv): boolean {
   return env.DEVSPACE_TOOL_MODE === "minimal" || parseBoolean(env.DEVSPACE_MINIMAL_TOOLS);
+}
+
+function parseLogLevel(value: string | undefined): LogLevel {
+  if (!value || value === "info") return "info";
+  if (["silent", "error", "warn", "debug"].includes(value)) return value as LogLevel;
+
+  throw new Error(`Invalid DEVSPACE_LOG_LEVEL: ${value}`);
+}
+
+function parseLogFormat(value: string | undefined): LogFormat {
+  if (!value || value === "json") return "json";
+  if (value === "pretty") return "pretty";
+
+  throw new Error(`Invalid DEVSPACE_LOG_FORMAT: ${value}`);
 }
 
 function parseList(value: string | undefined): string[] {
@@ -128,6 +156,18 @@ function parseToolNaming(value: string | undefined): ToolNamingMode {
   throw new Error(`Invalid DEVSPACE_TOOL_NAMING: ${value}`);
 }
 
+function parseLoggingConfig(env: NodeJS.ProcessEnv): LoggingConfig {
+  return {
+    level: parseLogLevel(env.DEVSPACE_LOG_LEVEL),
+    format: parseLogFormat(env.DEVSPACE_LOG_FORMAT),
+    requests: env.DEVSPACE_LOG_REQUESTS === undefined ? true : parseBoolean(env.DEVSPACE_LOG_REQUESTS),
+    assets: parseBoolean(env.DEVSPACE_LOG_ASSETS),
+    toolCalls: env.DEVSPACE_LOG_TOOL_CALLS === undefined ? true : parseBoolean(env.DEVSPACE_LOG_TOOL_CALLS),
+    shellCommands: parseBoolean(env.DEVSPACE_LOG_SHELL_COMMANDS),
+    trustProxy: parseBoolean(env.DEVSPACE_TRUST_PROXY),
+  };
+}
+
 function defaultStateDir(): string {
   return join(homedir(), ".local", "share", "devspace");
 }
@@ -155,6 +195,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     skillsEnabled: parseBoolean(env.DEVSPACE_SKILLS),
     skillPaths: parseList(env.DEVSPACE_SKILL_PATHS),
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? defaultAgentDir())),
+    logging: parseLoggingConfig(env),
     autocommit: parseAutoCommitConfig(env),
   };
 }
