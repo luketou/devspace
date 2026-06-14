@@ -17,6 +17,11 @@ delegated to a separate local agent loop.
 - `list_directory`
 - `run_shell`
 
+Set `PI_ON_MCP_TOOL_MODE=minimal` to disable `grep_files`, `find_files`, and
+`list_directory`. In that mode, the server instructs clients to use `run_shell`
+with command-line tools such as `grep`, `rg`, `find`, `ls`, and `tree` for
+search and directory inspection.
+
 Server-level workflow guidance is exposed through MCP initialize instructions,
 not a dedicated info tool.
 
@@ -56,6 +61,7 @@ PI_ON_MCP_TOKEN="change-me" \
 PI_ON_MCP_ALLOWED_ROOTS="/home/waishnav/personal,/home/waishnav/work" \
 PI_ON_MCP_ALLOWED_HOSTS="localhost,127.0.0.1,agent.gitcms.blog" \
 PI_ON_MCP_PUBLIC_BASE_URL="https://agent.gitcms.blog" \
+PI_ON_MCP_TOOL_MODE="full" \
 npm run dev
 ```
 
