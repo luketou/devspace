@@ -72,11 +72,13 @@ function toolNameFromMeta(result: CallToolResult): ToolName | undefined {
   return isToolName(meta?.tool) ? meta.tool : undefined;
 }
 
-function isToolResultCard(value: unknown): value is Omit<ToolResultCard, "tool"> {
-  if (!value || typeof value !== "object") return false;
+function resultIdFromMeta(result: CallToolResult): string | undefined {
+  const meta = result._meta as Record<string, unknown> | undefined;
+  return typeof meta?.resultId === "string" ? meta.resultId : undefined;
+}
 
-  const candidate = value as Partial<ToolResultCard>;
-  return typeof candidate.resultId === "string";
+function isToolResultCard(value: unknown): value is Omit<ToolResultCard, "tool" | "resultId"> {
+  return Boolean(value && typeof value === "object");
 }
 
 function getStructuredContent<T>(result: CallToolResult): T | undefined {
@@ -107,7 +109,8 @@ function AppRoot() {
     createdApp.ontoolresult = (result) => {
       const structured = result.structuredContent;
       const tool = toolNameFromMeta(result);
-      if (!tool || !isToolResultCard(structured)) {
+      const resultId = resultIdFromMeta(result);
+      if (!tool || !resultId || !isToolResultCard(structured)) {
         setCard(null);
         setPayload(null);
         setExpanded(false);
@@ -116,7 +119,7 @@ function AppRoot() {
         return;
       }
 
-      setCard({ ...structured, tool });
+      setCard({ ...structured, tool, resultId });
       setPayload(null);
       setExpanded(false);
       setLoadState("idle");

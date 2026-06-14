@@ -90,7 +90,6 @@ function cardOutputSchema(
   extra: z.ZodRawShape = {},
 ): z.ZodRawShape {
   return {
-    resultId: z.string(),
     workspaceId: z.string(),
     path: z.string().optional(),
     summary,
@@ -387,7 +386,6 @@ function createMcpServer(
           ),
       },
       outputSchema: {
-        resultId: z.string(),
         workspaceId: z.string(),
         root: z.string(),
         summary: z.object({
@@ -454,9 +452,8 @@ function createMcpServer(
 
       return {
         content: resultContent,
-        _meta: { tool: "open_workspace" },
+        _meta: { tool: "open_workspace", resultId: storedResult.id },
         structuredContent: {
-          resultId: storedResult.id,
           workspaceId: workspace.id,
           root: workspace.root,
           summary,
@@ -540,9 +537,8 @@ function createMcpServer(
 
       return {
         ...response,
-        _meta: { tool: "read_file" },
+        _meta: { tool: "read_file", resultId: storedResult.id },
         structuredContent: {
-          resultId: storedResult.id,
           workspaceId,
           path: input.path,
           summary,
@@ -620,9 +616,8 @@ function createMcpServer(
 
       return {
         ...response,
-        _meta: { tool: "write_file" },
+        _meta: { tool: "write_file", resultId: storedResult.id },
         structuredContent: {
-          resultId: storedResult.id,
           workspaceId,
           path: input.path,
           summary,
@@ -717,9 +712,8 @@ function createMcpServer(
 
       return {
         content: editContent,
-        _meta: { tool: "edit_file" },
+        _meta: { tool: "edit_file", resultId: storedResult.id },
         structuredContent: {
-          resultId: storedResult.id,
           workspaceId,
           status: "applied",
           path: input.path,
@@ -800,9 +794,8 @@ function createMcpServer(
 
         return {
           ...response,
-          _meta: { tool: "grep_files" },
+          _meta: { tool: "grep_files", resultId: storedResult.id },
           structuredContent: {
-            resultId: storedResult.id,
             workspaceId,
             path: input.path,
             summary,
@@ -878,9 +871,8 @@ function createMcpServer(
 
         return {
           ...response,
-          _meta: { tool: "find_files" },
+          _meta: { tool: "find_files", resultId: storedResult.id },
           structuredContent: {
-            resultId: storedResult.id,
             workspaceId,
             path: input.path,
             summary,
@@ -948,9 +940,8 @@ function createMcpServer(
 
         return {
           ...response,
-          _meta: { tool: "list_directory" },
+          _meta: { tool: "list_directory", resultId: storedResult.id },
           structuredContent: {
-            resultId: storedResult.id,
             workspaceId,
             path: input.path,
             summary,
@@ -1041,9 +1032,8 @@ function createMcpServer(
 
       return {
         ...response,
-        _meta: { tool: "run_shell" },
+        _meta: { tool: "run_shell", resultId: storedResult.id },
         structuredContent: {
-          resultId: storedResult.id,
           workspaceId,
           path: workingDirectory,
           summary,
