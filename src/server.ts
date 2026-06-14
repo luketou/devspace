@@ -15,7 +15,7 @@ import express from "express";
 import type { Request, Response } from "express";
 import * as z from "zod/v4";
 import { createAutoCommitManager } from "./autocommit/manager.js";
-import { loadConfig, type ServerConfig, type ToolCardMode } from "./config.js";
+import { loadConfig, type ServerConfig, type WidgetMode } from "./config.js";
 import {
   editFileTool,
   findFilesTool,
@@ -25,6 +25,7 @@ import {
   runShellTool,
   writeFileTool,
 } from "./pi-tools.js";
+import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { formatPathForPrompt } from "./skills.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
@@ -73,14 +74,15 @@ interface DiffStats {
   removals: number;
 }
 
-type ToolCardKind =
+type ToolWidgetKind =
   | "workspace"
   | "read"
   | "write"
   | "edit"
   | "search"
   | "directory"
-  | "shell";
+  | "shell"
+  | "review_changes";
 
 interface ToolDefinitionMeta extends Record<string, unknown> {
   ui: {
@@ -93,28 +95,26 @@ type EmptyToolDefinitionMeta = Record<string, unknown> & {
   "ui/resourceUri"?: string;
 };
 
-interface ToolCardDescriptorMeta {
+interface ToolWidgetDescriptorMeta {
   _meta: ToolDefinitionMeta | EmptyToolDefinitionMeta;
 }
 
-function shouldAttachToolCard(mode: ToolCardMode, kind: ToolCardKind): boolean {
+function shouldAttachWidget(mode: WidgetMode, kind: ToolWidgetKind): boolean {
   switch (mode) {
     case "off":
       return false;
-    case "write-only":
-      return kind === "write" || kind === "edit";
-    case "minimal":
-      return kind === "workspace" || kind === "write" || kind === "edit";
+    case "changes":
+      return kind === "review_changes";
     case "full":
       return true;
   }
 }
 
-function toolCardDescriptorMeta(
+function toolWidgetDescriptorMeta(
   config: ServerConfig,
-  kind: ToolCardKind,
-): ToolCardDescriptorMeta {
-  if (!shouldAttachToolCard(config.toolCardMode, kind)) return { _meta: {} };
+  kind: ToolWidgetKind,
+): ToolWidgetDescriptorMeta {
+  if (!shouldAttachWidget(config.widgets, kind)) return { _meta: {} };
 
   return {
     _meta: {
@@ -172,7 +172,7 @@ function serverInstructions(config: ServerConfig, toolNames: ToolNames): string 
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace as a local coding workspace. First call ${toolNames.openWorkspace} with a project directory inside an allowed root. Then use the returned workspaceId for all file, search, edit, write, and shell tools. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.`;
+  return `Use DevSpace as a local coding workspace. First call ${toolNames.openWorkspace} with a project directory inside an allowed root. Then use the returned workspaceId for all file, search, edit, write, and shell tools. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files. After completing a coherent set of file modifications, call review_changes once to show the user an aggregate diff review.`;
 }
 function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
   return {
@@ -198,6 +198,20 @@ const workspaceAgentsFileOutputSchema = z.object({
 
 const workspaceAvailableAgentsFileOutputSchema = z.object({
   path: z.string(),
+});
+
+const reviewFileOutputSchema = z.object({
+  path: z.string(),
+  previousPath: z.string().optional(),
+  type: z.enum(["change", "rename-pure", "rename-changed", "new", "deleted"]),
+  additions: z.number(),
+  removals: z.number(),
+});
+
+const reviewSummaryOutputSchema = z.object({
+  files: z.number(),
+  additions: z.number(),
+  removals: z.number(),
 });
 
 function isAuthorized(req: Request, config: ServerConfig): boolean {
@@ -380,6 +394,7 @@ function createMcpServer(
   config: ServerConfig,
   workspaces: WorkspaceRegistry,
   autoCommit: ReturnType<typeof createAutoCommitManager>,
+  reviewCheckpoints: ReturnType<typeof createReviewCheckpointManager>,
 ): McpServer {
   const toolNames = toolNamesFor(config);
   const server = new McpServer(
@@ -471,7 +486,7 @@ function createMcpServer(
         skillDiagnostics: z.array(z.unknown()),
         instruction: z.string(),
       },
-      ...toolCardDescriptorMeta(config, "workspace"),
+      ...toolWidgetDescriptorMeta(config, "workspace"),
       annotations: { readOnlyHint: true },
     },
     async ({ path, mode, baseRef }) => {
@@ -479,6 +494,10 @@ function createMcpServer(
       void autoCommit.initializeWorkspace({
         workspaceId: workspace.id,
         workspaceRoot: workspace.root,
+      });
+      void reviewCheckpoints.initializeWorkspace({
+        workspaceId: workspace.id,
+        root: workspace.root,
       });
       const visibleSkills = workspace.skills
         .filter((skill) => !skill.disableModelInvocation)
@@ -590,7 +609,7 @@ function createMcpServer(
           .describe("Maximum number of lines to read."),
       },
       outputSchema: resultOutputSchema(),
-      ...toolCardDescriptorMeta(config, "read"),
+      ...toolWidgetDescriptorMeta(config, "read"),
       annotations: { readOnlyHint: true },
     },
     async ({ workspaceId, ...input }) => {
@@ -649,7 +668,7 @@ function createMcpServer(
         content: z.string().describe("Complete new file content."),
       },
       outputSchema: resultOutputSchema(),
-      ...toolCardDescriptorMeta(config, "write"),
+      ...toolWidgetDescriptorMeta(config, "write"),
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
     async ({ workspaceId, ...input }) => {
@@ -730,7 +749,7 @@ function createMcpServer(
       outputSchema: resultOutputSchema({
         status: z.literal("applied"),
       }),
-      ...toolCardDescriptorMeta(config, "edit"),
+      ...toolWidgetDescriptorMeta(config, "edit"),
       annotations: EDIT_TOOL_ANNOTATIONS,
     },
     async ({ workspaceId, ...input }) => {
@@ -785,6 +804,68 @@ function createMcpServer(
     },
   );
 
+  registerAppTool(
+    server,
+    "review_changes",
+    {
+      title: "Review changes",
+      description:
+        "Review aggregate file changes in an open workspace since the last review checkpoint or since the workspace was opened. Use this after a coherent set of file modifications to show a single diff review card.",
+      inputSchema: {
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
+        since: z
+          .enum(["last_review", "workspace_open"])
+          .optional()
+          .describe("Defaults to last_review. Use workspace_open to compare against the initial open_workspace checkpoint."),
+        markReviewed: z
+          .boolean()
+          .optional()
+          .describe("Defaults to true. When true, advances the last_review checkpoint to the current workspace state."),
+      },
+      outputSchema: resultOutputSchema({
+        summary: reviewSummaryOutputSchema,
+        files: z.array(reviewFileOutputSchema),
+        patch: z.string(),
+      }),
+      ...toolWidgetDescriptorMeta(config, "review_changes"),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ workspaceId, since, markReviewed }) => {
+      const workspace = workspaces.getWorkspace(workspaceId);
+      const review = await reviewCheckpoints.reviewChanges({
+        workspaceId,
+        root: workspace.root,
+        since: since ?? "last_review",
+        markReviewed: markReviewed ?? true,
+      });
+
+      const content = [textBlock(review.result)];
+
+      return {
+        content,
+        _meta: {
+          tool: "review_changes",
+          card: {
+            workspaceId,
+            summary: review.summary,
+            files: review.files,
+            payload: {
+              patch: review.patch,
+            },
+          },
+        },
+        structuredContent: {
+          result: contentText(content),
+          summary: review.summary,
+          files: review.files,
+          patch: review.patch,
+        },
+      };
+    },
+  );
+
   if (!config.minimalTools) {
     registerAppTool(
       server,
@@ -807,7 +888,7 @@ function createMcpServer(
           include: z.string().optional().describe("Optional include glob."),
         },
         outputSchema: resultOutputSchema(),
-        ...toolCardDescriptorMeta(config, "search"),
+        ...toolWidgetDescriptorMeta(config, "search"),
         annotations: { readOnlyHint: true },
       },
       async ({ workspaceId, ...input }) => {
@@ -862,7 +943,7 @@ function createMcpServer(
             .describe("Optional path scope relative to the workspace root."),
         },
         outputSchema: resultOutputSchema(),
-        ...toolCardDescriptorMeta(config, "search"),
+        ...toolWidgetDescriptorMeta(config, "search"),
         annotations: { readOnlyHint: true },
       },
       async ({ workspaceId, ...input }) => {
@@ -917,7 +998,7 @@ function createMcpServer(
             ),
         },
         outputSchema: resultOutputSchema(),
-        ...toolCardDescriptorMeta(config, "directory"),
+        ...toolWidgetDescriptorMeta(config, "directory"),
         annotations: { readOnlyHint: true },
       },
       async ({ workspaceId, ...input }) => {
@@ -982,7 +1063,7 @@ function createMcpServer(
           .describe("Timeout in seconds. Defaults to 30, max 300."),
       },
       outputSchema: resultOutputSchema(),
-      ...toolCardDescriptorMeta(config, "shell"),
+      ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
     async ({ workspaceId, workingDirectory, ...input }) => {
@@ -1042,6 +1123,7 @@ export function createServer(config = loadConfig()): RunningServer {
   const workspaceStore = createWorkspaceStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const autoCommit = createAutoCommitManager({ config: config.autocommit });
+  const reviewCheckpoints = createReviewCheckpointManager();
 
   app.options("/mcp-app-assets/{*asset}", (_req, res) => {
     setAssetHeaders(res);
@@ -1091,7 +1173,7 @@ export function createServer(config = loadConfig()): RunningServer {
           if (closedSessionId) transports.delete(closedSessionId);
         };
 
-        const server = createMcpServer(config, workspaces, autoCommit);
+        const server = createMcpServer(config, workspaces, autoCommit, reviewCheckpoints);
         await server.connect(transport);
       } else {
         sendJsonRpcError(res, 400, -32000, "No valid MCP session");
