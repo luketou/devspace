@@ -8,43 +8,30 @@ This is browser automation, not an official Microsoft MCP integration. The
 Copilot website can change without notice. Use it only where browser automation
 is permitted by your Microsoft agreement and organization policy.
 
-## Architecture
+## Choose a deployment
+
+| Deployment | Browser daemon | MCP client | Connection |
+| --- | --- | --- | --- |
+| Local | Your workstation | The same workstation | Local stdio |
+| Remote | A Linux server | Your workstation | SSH stdio |
+
+Use the local setup when the MCP client and Microsoft browser session can run
+on the same computer. Use the remote setup when Copilot should remain signed in
+and available on an always-on Linux server.
+
+In both deployments, the MCP process is a small stdio adapter. It connects to a
+long-running browser daemon through a private Unix socket:
 
 ```text
-Codex or another MCP client
-  -> ssh user@server copilot-web-bridge mcp
-  -> private Unix socket
-  -> systemd user daemon
-  -> persistent Chromium profile
-  -> Microsoft 365 Copilot Chat
+MCP client -> copilot-web-bridge mcp -> private Unix socket
+           -> browser daemon -> persistent browser profile
+           -> Microsoft 365 Copilot Chat
 ```
 
-Microsoft credentials, cookies, and MFA stay in the Chromium profile on the
-server. They are never returned through MCP.
+Microsoft credentials, cookies, and MFA remain in the browser profile on the
+machine running the daemon. They are never returned through MCP.
 
-## Linux requirements
-
-Node.js 22–26 and a Chromium-compatible browser are required. On Ubuntu or
-Debian, install the runtime dependencies:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y chromium xvfb x11vnc novnc websockify
-```
-
-Package names vary by distribution. `copilot-web-bridge doctor` reports missing
-commands. If Chromium is installed elsewhere, set `chromiumExecutable` in:
-
-```text
-~/.config/copilot-web-bridge/config.json
-```
-
-On a rootless headless server, the bridge can use `Xvnc` directly instead of
-the `Xvfb` plus `x11vnc` pair. A user-local noVNC checkout at
-`~/.local/share/novnc` and `~/.local/bin/websockify` are detected
-automatically.
-
-## Install
+## Install the package
 
 From npm after publication:
 
@@ -71,7 +58,106 @@ npm run copilot-web:test
 npm run copilot-web:build
 ```
 
-Initialize and install the user service:
+The remaining steps depend on whether the bridge runs locally or remotely.
+
+## Local setup
+
+This setup runs the browser daemon and MCP client on the same macOS, Windows,
+or desktop Linux computer.
+
+### 1. Initialize and check the local runtime
+
+```bash
+copilot-web-bridge init
+copilot-web-bridge doctor
+```
+
+If `doctor` reports a missing browser, install a Chromium-compatible browser or
+set `browserEngine`/`chromiumExecutable` in:
+
+```text
+~/.config/copilot-web-bridge/config.json
+```
+
+### 2. Complete Microsoft sign-in
+
+For the initial sign-in, set `"headless": false` in the config file and start
+the daemon in one terminal:
+
+```bash
+copilot-web-bridge daemon
+```
+
+In another terminal, open the login page:
+
+```bash
+copilot-web-bridge login
+```
+
+Complete Microsoft sign-in, consent, CAPTCHA, and MFA yourself in the browser,
+then verify:
+
+```bash
+copilot-web-bridge status
+```
+
+The expected status contains `"loggedIn": true`. You may then stop the daemon,
+restore `"headless": true`, and start it again for normal use without a visible
+browser window. Keep the daemon running while using the MCP server.
+
+### 3. Add the local MCP server
+
+For Codex CLI:
+
+```bash
+codex mcp add copilot-web -- copilot-web-bridge mcp
+```
+
+For an MCP client that accepts JSON configuration:
+
+```json
+{
+  "mcpServers": {
+    "copilot-web": {
+      "command": "copilot-web-bridge",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Restart the MCP client after changing its configuration. If the globally
+installed executable is not on the client's `PATH`, replace
+`copilot-web-bridge` with its absolute path.
+
+### 4. Verify local MCP use
+
+Ask the MCP client to call `copilot_status`, then call `copilot_chat` with a
+small test prompt. A ready installation reports `loggedIn: true` and returns a
+Copilot response with mode metadata.
+
+## Remote setup
+
+This setup runs the browser daemon on a Linux server. The local MCP client uses
+SSH to start the remote stdio adapter; no public MCP or browser-debugging port
+is required.
+
+### 1. Prepare the Linux server
+
+Node.js 22–26 and a Chromium-compatible browser are required. On Ubuntu or
+Debian:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y chromium xvfb x11vnc novnc websockify
+```
+
+Package names vary by distribution. On a rootless headless server, the bridge
+can use `Xvnc` instead of the `Xvfb` plus `x11vnc` pair. A user-local noVNC
+checkout at `~/.local/share/novnc` and `~/.local/bin/websockify` is detected
+automatically.
+
+Install the package on the server, then run:
 
 ```bash
 copilot-web-bridge init
@@ -80,47 +166,71 @@ loginctl enable-linger "$USER"
 copilot-web-bridge install-service
 ```
 
-`loginctl enable-linger` might require an administrator. It lets the user
-service continue running after the SSH session ends.
+`loginctl enable-linger` might require an administrator. It allows the systemd
+user service to continue running after the SSH session ends. If Chromium is in
+a nonstandard location, set `chromiumExecutable` in the bridge config.
 
-## Microsoft login
+### 2. Complete Microsoft sign-in through an SSH tunnel
 
-Run this on the server:
+For the initial login, set `"headless": false` in
+`~/.config/copilot-web-bridge/config.json`, then restart the user service:
+
+```bash
+systemctl --user restart copilot-web-bridge.service
+```
+
+On the server, start login access:
 
 ```bash
 copilot-web-bridge login user@server
 ```
 
-The command prints an SSH tunnel command similar to:
+The command prints the exact tunnel command and noVNC URL. On your local
+computer, keep the printed tunnel open; it normally resembles:
 
 ```bash
 ssh -L 6080:127.0.0.1:6080 user@server
 ```
 
-Keep the tunnel open and browse locally to:
+Open the printed URL locally, normally:
 
 ```text
 http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale
 ```
 
-Complete Microsoft sign-in, consent, CAPTCHA, and MFA yourself. Then verify:
+Complete Microsoft sign-in, consent, CAPTCHA, and MFA yourself. Then check on
+the server:
 
 ```bash
 copilot-web-bridge status
 ```
 
-The browser runs headlessly by default. For the initial interactive sign-in,
-temporarily set `"headless": false` in
-`~/.config/copilot-web-bridge/config.json`, restart the daemon, and run
-`copilot-web-bridge login`. After sign-in succeeds, restore `"headless": true`
-and restart the daemon for normal MCP use without a visible browser window.
+The expected status contains `"loggedIn": true`. The noVNC endpoint binds only
+to server loopback and stops automatically after the daemon observes a usable
+Copilot prompt. After sign-in succeeds, restore `"headless": true` and restart
+the service for normal operation without a visible browser session.
 
-The noVNC endpoint binds only to server loopback and is stopped automatically
-after the daemon observes a usable Copilot prompt.
+### 3. Confirm noninteractive SSH execution
 
-## Connect from another computer
+From the local computer, this command must work without a password prompt:
 
-Configure the MCP client to start the remote stdio command over SSH:
+```bash
+ssh -o BatchMode=yes user@server copilot-web-bridge status
+```
+
+The remote account needs `copilot-web-bridge` on its noninteractive `PATH`. If
+it is missing, use the executable's absolute path in this command and in the MCP
+configuration.
+
+### 4. Add the remote MCP server
+
+For Codex CLI:
+
+```bash
+codex mcp add copilot-web -- ssh -o BatchMode=yes user@server copilot-web-bridge mcp
+```
+
+For an MCP client that accepts JSON configuration:
 
 ```json
 {
@@ -139,8 +249,8 @@ Configure the MCP client to start the remote stdio command over SSH:
 }
 ```
 
-The remote account needs the package on its noninteractive `PATH`. If npm's
-global bin directory is not loaded by SSH, use the full executable path.
+Restart the MCP client after changing its configuration, then call
+`copilot_status` and `copilot_chat` to verify the complete path.
 
 For tighter SSH access, use a dedicated Linux account and a key restricted in
 `~/.ssh/authorized_keys`:
