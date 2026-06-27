@@ -9,6 +9,28 @@ test("runs the browser headlessly by default", () => {
   assert.equal(defaultConfig().headless, true);
 });
 
+test("prefers Think Deeper by default", () => {
+  assert.equal(defaultConfig().preferredMode, "think_deeper");
+});
+
+test("supports a portable preferred-mode environment override", () => {
+  const root = mkdtempSync(join(tmpdir(), "copilot-web-bridge-mode-"));
+  const env = {
+    HOME: root,
+    COPILOT_WEB_BRIDGE_CONFIG_DIR: join(root, "config"),
+    COPILOT_WEB_BRIDGE_DATA_DIR: join(root, "data"),
+    COPILOT_WEB_BRIDGE_STATE_DIR: join(root, "state"),
+  };
+  initializeConfig(env);
+
+  const loaded = loadConfig({
+    ...env,
+    COPILOT_WEB_BRIDGE_PREFERRED_MODE: "auto",
+  });
+
+  assert.equal(loaded.config.preferredMode, "auto");
+});
+
 test("initializes private portable directories and supports environment overrides", () => {
   const root = mkdtempSync(join(tmpdir(), "copilot-web-bridge-config-"));
   const env = {

@@ -1,3 +1,13 @@
+export type PreferredMode = "think_deeper" | "auto";
+export type EffectiveMode = PreferredMode | "unknown";
+
+export interface ModeSelectionResult {
+  requestedMode: PreferredMode;
+  effectiveMode: EffectiveMode;
+  fallbackUsed: boolean;
+  modeWarning?: string;
+}
+
 export interface ConversationRecord {
   id: string;
   url: string;
