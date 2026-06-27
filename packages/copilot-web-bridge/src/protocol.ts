@@ -70,7 +70,7 @@ export interface RpcResponse {
   };
 }
 
-export interface AskResult {
+export interface AskResult extends ModeSelectionResult {
   requestId: string;
   conversationId: string;
   conversationUrl: string;

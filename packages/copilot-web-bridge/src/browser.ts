@@ -11,6 +11,7 @@ import {
 } from "playwright-core";
 import type { BridgeConfig } from "./config.js";
 import { BridgeError } from "./errors.js";
+import { ensurePreferredMode } from "./mode.js";
 import type { AskResult, BridgeStatus, ConversationRecord } from "./protocol.js";
 import { redactSensitiveContent } from "./redaction.js";
 import { StateStore } from "./state.js";
@@ -216,6 +217,11 @@ export class CopilotBrowser {
     try {
       const timeoutMs =
         (params.timeoutSeconds ?? this.config.defaultTimeoutSeconds) * 1000;
+      await promptInput(page);
+      const modeSelection = await ensurePreferredMode(
+        page,
+        this.config.preferredMode,
+      );
       const input = await promptInput(page);
       const before = await responseSnapshot(page);
       await fillPrompt(input, sanitized.text);
@@ -247,6 +253,7 @@ export class CopilotBrowser {
         conversationUrl: page.url(),
         response,
         redactions: sanitized.redactions,
+        ...modeSelection,
       };
     } finally {
       this.activeRequests.delete(requestId);
