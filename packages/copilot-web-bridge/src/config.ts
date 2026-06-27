@@ -8,6 +8,9 @@ import {
 import { dirname } from "node:path";
 import { z } from "zod";
 import { bridgePaths, type BridgePaths } from "./paths.js";
+import type { PreferredMode } from "./protocol.js";
+
+const PreferredModeSchema = z.enum(["think_deeper", "auto"]);
 
 const ConfigSchema = z.object({
   copilotUrl: z.string().url().default("https://m365.cloud.microsoft/chat"),
@@ -23,10 +26,13 @@ const ConfigSchema = z.object({
   stableWindowMs: z.number().int().min(500).max(10000).default(800),
   responsePollMs: z.number().int().min(50).max(2000).default(150),
   loginCheckIntervalMs: z.number().int().min(500).max(10000).default(2000),
-  headless: z.boolean().default(true)
+  headless: z.boolean().default(true),
+  preferredMode: PreferredModeSchema.default("think_deeper"),
 });
 
-export type BridgeConfig = z.infer<typeof ConfigSchema>;
+export type BridgeConfig = z.infer<typeof ConfigSchema> & {
+  preferredMode: PreferredMode;
+};
 
 export interface LoadedConfig {
   config: BridgeConfig;
@@ -102,6 +108,9 @@ export function loadConfig(
     overrides.loginCheckIntervalMs = Number(
       env.COPILOT_WEB_BRIDGE_LOGIN_CHECK_INTERVAL_MS,
     );
+  }
+  if (env.COPILOT_WEB_BRIDGE_PREFERRED_MODE) {
+    overrides.preferredMode = env.COPILOT_WEB_BRIDGE_PREFERRED_MODE;
   }
 
   return {

@@ -43,6 +43,9 @@ test("exposes status and conversation tools through stdio MCP", async () => {
         conversationUrl: "https://m365.cloud.microsoft/chat/conversations/1",
         response: "COPILOT_WEB_OK",
         redactions: [],
+        requestedMode: "think_deeper",
+        effectiveMode: "think_deeper",
+        fallbackUsed: false,
       };
     }
     throw new Error(`unexpected ${request.method}`);
@@ -80,6 +83,9 @@ test("exposes status and conversation tools through stdio MCP", async () => {
       text?: string;
     }>;
     assert.match(chatContent[0]?.text ?? "", /COPILOT_WEB_OK/);
+    assert.match(chatContent[0]?.text ?? "", /"requestedMode": "think_deeper"/);
+    assert.match(chatContent[0]?.text ?? "", /"effectiveMode": "think_deeper"/);
+    assert.match(chatContent[0]?.text ?? "", /"fallbackUsed": false/);
   } finally {
     await client.close();
     await rpc.close();
