@@ -152,6 +152,31 @@ restrict,command="/absolute/path/to/copilot-web-bridge mcp" ssh-ed25519 AAAA...
 Use a separate key for login and service administration because a forced MCP
 key cannot create the noVNC tunnel.
 
+## Preferred reasoning mode
+
+The bridge attempts `Think Deeper` before every `copilot_chat` and
+`copilot_ask` request. This is a source-level policy, so it works consistently
+after installing the bridge on another computer; browser profile preferences do
+not need to be copied.
+
+Each computer still requires its own Microsoft sign-in. If `Think Deeper` is
+not available for an account or Microsoft changes the selector, the request
+continues in `Auto` when possible and reports fallback metadata.
+
+To prefer `Auto` explicitly, set either the config field:
+
+```json
+{
+  "preferredMode": "auto"
+}
+```
+
+or the service environment variable:
+
+```text
+COPILOT_WEB_BRIDGE_PREFERRED_MODE=auto
+```
+
 ## MCP tools
 
 - `copilot_status`
@@ -169,6 +194,18 @@ Use `copilot_chat` for normal requests. It removes the separate
 `copilot_conversation_create` round trip and keeps the most recently used
 conversation warm. Use the lower-level conversation tools only when you need
 multiple isolated threads.
+
+Both request tools report the requested and verified effective mode. A fallback
+response includes metadata such as:
+
+```json
+{
+  "requestedMode": "think_deeper",
+  "effectiveMode": "auto",
+  "fallbackUsed": true,
+  "modeWarning": "Unable to select Think Deeper; continuing with Auto when available."
+}
+```
 
 ## Triggering From Codex
 
